@@ -1,0 +1,5 @@
+<?xml version="1.0" ?>
+<launch>
+    <node name="$(anon trigger)" pkg="skeleton" type="camera_input.py" output="screen">
+    </node> 
+</launch>
