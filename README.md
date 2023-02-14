@@ -1,6 +1,6 @@
-# detect_mechanical_parts
+# Grasping with object skeleton
 
-ROS package to read a stream of images, detect mechanical parts of cars using YOLOv4 and view the detection results.
+ROS package to read an image from topic, detect mechanical parts of cars using YOLOv4 and generate object skeleton.
 ___
 ## Launch Requirements
 * ROS Melodic (*Recommended for Ubuntu 18.04*)
