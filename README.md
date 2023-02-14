@@ -3,30 +3,30 @@
 ROS package to read a stream of images, detect mechanical parts of cars using YOLOv4 and view the detection results.
 ___
 ## Launch Requirements
-* ROS Noetic 1.15.9 (*Recommended for Ubuntu 20.04*)
-* Python 3.4+
-* OpenCV 4.4.0+
-* NumPy 1.17.4+
+* ROS Melodic (*Recommended for Ubuntu 18.04*)
+* Python 3.6+
+* OpenCV 4.7.0+
+* NumPy 1.19.5+
 * Download [yolo-obj.weights](https://drive.google.com/file/d/1rSoWctsJGUFySvskffHQ4HlEMEv7jYyw/view?usp=sharing) and place it in the [yolo_model](yolo_model) folder
 
 ## Installation
-In order to install detect_mechanical_parts, clone this repository in your catkin workspace and compile the package using ROS.
+In order to install graspingWithSkeleton, clone this repository in your catkin workspace and compile the package using ROS.
 
 ```shell
 $ cd catkin_workspace/src
-$ git clone https://github.com/leonard0guerra/detect_mechanical_parts.git
+$ git clone https://github.com/leonard0guerra/graspingWithSkeleton.git
 $ cd ..
-$ catkin build detect_mechanical_parts
+$ catkin build graspingWithSkeleton
 ```
 
 ## Detection :robot:
 ![](demos/detection_bag.png)
-1. To launch detect_mechanical_parts run the command:
+1. To launch graspingWithSkeleton run the command:
     ```shell
-    $ roslaunch detect_mechanical_parts detect_mechanical_parts.launch
+    $ roslaunch skeleton skeleton.launch
     ```
-2. You can download [this bag](https://drive.google.com/file/d/1CngH1nSqTF9j4RZHsccH1meC1ZSXYaKp/view?usp=sharing) and run the command:
+2. You can download [this bag](https://drive.google.com/drive/folders/1ZWlWnwk1iz21gFU0mAgiG371qSp5lNLL?usp=share_link) and run the command:
     ```shell
-    $ rosbag play 20210113_161956.bag --topics /device_0/sensor_1/Color_0/image/data
+    $ rosbag play <bag-name>.bag
     ```
-You can change the parameters in the [launch file](launch/detect_mechanical_parts.launch) (e.g. topics, confidence threshold value...) and launch it.
+You can change the parameters in the [launch file](launch/skeleton.launch) (e.g. topics, confidence threshold value...) and launch it.
