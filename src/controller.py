@@ -10,11 +10,13 @@ from geometry_msgs.msg import Pose
 from geometry_utility import GeomUtility
 #from cv_bridge import CvBridge, CvBridgeError
 
-from skeleton.msg import BoxesMsg, DetectionArrayMsg, KeypointsMsg, Command, CommandResult
+from skeleton.msg import BoxesMsg, DetectionArrayMsg, KeypointsMsg, Command, CommandResult, DetectionMsg
 
 import cv2 as cv
 import numpy as np
 import imageio
+import timeit
+import time
 import matplotlib.pyplot as plt
 
 class Controller:
@@ -33,87 +35,67 @@ class Controller:
         detections_bbox_topic = rospy.get_param(self.node_name + '/detections_bbox_topic') # dove sono pubblica le BB (senza le parti piccole TODO)
         keypoints_topic = rospy.get_param(self.node_name + '/keypoints_topic')
 
-        #rospy.Subscriber(detections_bbox_topic, DetectionArrayMsg, self.get_detection_BB, queue_size=1, buff_size=2**24)
-        #rospy.Subscriber(keypoints_topic, KeypointsMsg, self.get_keypoints, queue_size=1, buff_size=2**24)
         bboxes_sub = message_filters.Subscriber(detections_bbox_topic, DetectionArrayMsg, queue_size=1)
         keypoints_sub = message_filters.Subscriber(keypoints_topic, KeypointsMsg, queue_size=1)
 
         ts = message_filters.ApproximateTimeSynchronizer([bboxes_sub, keypoints_sub], 1, 4, allow_headerless=True) 
         ts.registerCallback(self.get_BB_and_keypoints)
-        # Nel topic seguente gestiamo gli errori di movimento del robot e errori di grasping (prevedi 2 o 3 stringhe diverse)
+
         rospy.Subscriber('/robot_command_done', CommandResult, self.robot_done_callback, queue_size=1, buff_size=2**24) 
         rospy.Subscriber('/robot_command_error', String, self.robot_error_callback, queue_size=1, buff_size=2**24) 
 
         rospy.Subscriber(trigger_camera_topic, String, self.trigger_camera, queue_size=1, buff_size=2**24)
 
-        #rostopic pub /controller/robot_command_done std_msgs/String "ok"
-
         # PUBLISHERS
         self.__publisherTriggerCamera = rospy.Publisher(trigger_camera_topic, String, queue_size=1)
         self.__publisherCommandToRobot = rospy.Publisher('/robot_command', Command, queue_size=1)
 
-        # si iscrive a DETECTED BB
-
-        # si iscrive a keypoints (sincronizzato??)
-
-        #pubblico comandi per il robot
-
-        # controllo se ho i 3 punti, se non li ho dico al robot di muoversi 
-
-        # quando il robot ha finito dico di prendere un'altr immagine --> pubblico su rtrigger camera
-
-        # se ho i 3 punti: uso la BB per capire se è girato o no
-        # mi calcolo il piano 
-        # se è capovolto: calcolo altezza, normale e mando al robot
-        # se non è capovolto : uso il 4 keypoint per andare e il piano per la normale e mando al robot
 
         self.detectedBBs_list = []
-        self.keypoints3D = []
         self.currentCommand = ""
+        self.depth_array = []
 
-        self.Ae_curr = np.array([[-0.470616, -0.865341, -0.172351, -0.287212],
-                                [-0.854349, 0.495718, -0.156046, -0.416609],
-                                [0.220471, 0.0738101, -0.972597, 0.00588167],
-                                [0, 0, 0, 1]])
+        self.Ae_curr = np.array([[-0.106389, 0.994181, 0.0162987, -0.163438],
+                            [0.994245, 0.106173, 0.0135973, 0.240477],
+                            [0.0117877, 0.0176515, -0.999775, 0.201297],
+                            [0, 0, 0, 1]])
 
+        self.Ace = np.array([[0.02219194357, -0.9997472712, 0.003593246995, 0.06013792774],
+                            [0.9997499728,  0.02220156848,  0.00266124757,  -0.03995585374],
+                            [-0.002740350715,  0.00353329033,  0.9999900031,  -0.0641041473],
+                            [0, 0, 0, 1]])
 
-        self.Ace = np.array([[-0.005812655098, -0.9991180429, 0.04158544615, 0.06709041116],
-                            [0.9999425447, -0.006181950697, -0.008757327031, -0.03431457374],
-                            [0.009006682622, 0.04153215353, 0.9990965719, -0.06649198096],
-                            [0.,  0.,  0.,  1.]])     # matrice camera-end-effector
-
-                             
-
-        # TODO
-        self.T_home = np.array([[-0.1382, 0.9903, 0.0132,-0.0949],
-                            [0.9904, 0.1382, 0.0043, 0.3899],
-                            [0.0024, 0.0137, -0.9999,  0.3916],
-                            [0., 0., 0., 1.0000]])
-        
-        self.T_release = np.array([[-0.1382, 0.9903, 0.0132,-0.0949],
-                            [0.9904, 0.1382, 0.0043, 0.3899],
-                            [0.0024, 0.0137, -0.9999,  0.3016],
+        self.T_start = np.array([[0.099664, 0.99501, 0.001314, -0.10378],
+                            [0.995011, 0.099661, 0.000322758, 0.370664], 
+                            [0.000190106, 0.00134041, -0.999999, 0.277478], 
                             [0., 0., 0., 1.0000]])
 
-        self.K = np.array([[605.81918473810867, 0.0, 324.66592260274075], 
-                           [0.0, 603.77141649252928, 236.93792129936679], 
+        self.T_home = np.array([[-0.3256,   0.945416, 0.0123956, -0.00809442],
+                                 [0.945362,  0.325303, 0.0212066, 0.480168],
+                                 [0.0160167, 0.0186232, -0.999698, 0.25131],
+                                 [0, 0, 0, 1]])
+
+        self.T_release = np.array([[0.099664, 0.99501, 0.001314, -0.10378],
+                            [0.995011, 0.099661, 0.000322758, 0.370664], #38
+                            [0.000190106, 0.00134041, -0.999999, 0.327478], #15
+                            [0., 0., 0., 1.0000]])
+
+        self.K = np.array([[613.29049956446272, 0.0, 323.86558088925034], 
+                           [0.0, 612.53173150788348, 238.85284745225653], 
                            [0.0, 0.0, 1.0]])
+
+        self.angleForLook = np.pi/2 # questo angolo indica la successiva posa di vista
 
     def trigger_camera(self, data):
         try:
             if data.data=='start':
+                self.T_home = self.T_start
                 self.goToHome('homeStart')
         except CvBridgeError as e:
  	        print(e)
 
     def get_BB_and_keypoints(self, detectedBB, keypoints):
         # NB - IF THERE ARE MULTIPLE OBJECTS WE TAKE THE FIRST
-        print('------------------------')
-        print(detectedBB)
-        print('------------------------')
-        print(keypoints)
-        for i in range(len(detectedBB.detections)):
-            self.detectedBBs_list.append(detectedBB.detections[i])
         keypoints_list = []
         for j in range(len(keypoints.keypoints)):
             keypoints_list.append(keypoints.keypoints[j])
@@ -122,78 +104,47 @@ class Controller:
         num = 2*self.number_of_keypoints
         keypointsFirstObj = keypoints_list[:num]
         key2D = keypoints_list.reshape(self.number_of_keypoints, 2)  
-        #key2D = key2D[:5,:]
+        
+        bbFirstObject = []
+        for i in range(len(detectedBB.detections)):
+            self.detectedBBs_list.append(detectedBB.detections[i])
+            
+            if GeomUtility.isIn(self.detectedBBs_list[i], key2D[0,:]) == True:
+                bbFirstObject = detectedBB.detections[i]
 
-        print('*********')
-        print(self.detectedBBs_list)
-        print(key2D)
+        bbFirstObject = detectedBB.detections[0] 
 
         esito = self.checkKeypoints(key2D)
 
-        if esito==True: #i punti ci sono
-            print("esito TRUE")
-            # CARICA IMMAGINE DEPTH
-            depth_image = imageio.imread(self.image_save_path + '/depth_01.tiff')
-            print(type(depth_image))
-            depth_array = np.array(depth_image)
-            #plt.imshow(depth_array)
-            #plt.show()
-            
-            self.keypoints3D = np.zeros((self.number_of_keypoints,3))
-            # CONVERTI 2D IN 3D
+        # Load IMG DEPTH
+        start = timeit.default_timer()
+        depth_image = imageio.imread(self.image_save_path + '/depth_01.tiff')
+        self.depth_array = np.array(depth_image)
+
+        if esito==True: 
+            self.key3D_cam = np.zeros((self.number_of_keypoints,3))
+            # 2D TO 3D
             for j in range(len(key2D)):
                 if np.all(key2D[j,:] > 0):
-                    keyCam_ = GeomUtility.deproject_pixel_to_point(key2D[j,:], depth_array, self.K)
+                    keyCam_ = GeomUtility.deproject_pixel_to_point(key2D[j,:], self.depth_array, self.K)
                     keyCam = np.array([keyCam_[0], keyCam_[1], keyCam_[2], 1])
-                    #keyCam = np.array([keyCam_[0], keyCam_[1], keyCam_[2], 1])
 
-                    print("Punto " + str(j))
-                    print("terna camera 3D")
-                    print(keyCam.T)
-                    print()
-                    print("terna end-effector")
-                    print(self.Ace.dot(keyCam.T))
-                    print()
-                    print("terna mondo")
-                    print(self.Ae_curr.dot(self.Ace.dot(keyCam.T)))
-                    print()
-                    #print('-_-_-_-_-_')
-                    # TRAFORMA I PUNTI IN COORD ROBOT
-                    key3D = self.Ae_curr.dot(self.Ace.dot(keyCam.T))
-                    #print('-_********** 3d')
-                    #print(np.array(key3D))
-                    self.keypoints3D[j,:] = key3D[:3]
+                    # Robot FRAMe
+                    self.key3D_cam[j,:] = keyCam.T[:3]
                 else:
-                    self.keypoints3D[j,:] = np.array([-10, -10, -10])
             
-            print('Punti in terna base')
-            print(self.keypoints3D)
-            print()
             
-            # CALCOLA PIANO
-            #normal_vec = GeomUtility.getNormalVec(self.keypoints3D[0,:], self.keypoints3D[1,:], self.keypoints3D[2,:]) #planeWith3Points(P):
-            #keyPin = self.keypoints[5,:]
+            Tg_cam = GeomUtility.computeGraspingPointWithTriple(bbFirstObject, self.key3D_cam, self.Ae_curr[:3,:3])
+            T_a = self.Ae_curr.dot(self.Ace.dot(Tg_cam))
+
+            stop = timeit.default_timer()
+            print('TIME COMPUTATION GRASPING_POINT: ', stop - start)  
             
-            # CALCOLA PUNTO DI PRESA
-            T_a = GeomUtility.computeGraspingPoint(self.detectedBBs_list[0], self.keypoints3D, self.Ae_curr[:3,:3])
             self.R = T_a[:3,:3]
             self.p = T_a[:3, 3]            
-            #self.R e self.p ci arrivano dal ragionatore
-            #self.R = np.array([[-1,  0,  0],
-            #                    [0,  1,  0],
-            #                    [0,  0, -1]])
-            #self.p = np.array([0.2, 0.3, 0.2])
-            print()
-            print('Grasping point')
-            print(self.R)
-            print(self.p)
 
             self.quat = GeomUtility.r2quat(self.R)
-            print('{position: {x: ' + str(self.p[0]) + ', y: ' + str(self.p[1]) + ', z: ' + str(self.p[2]) + '}, orientation: {x: ' + str(self.quat[1]) + ', y: ' + str(self.quat[2]) + ', z: ' + str(self.quat[3]) + ', w: ' + str(self.quat[0]) + '}}')
             p_approach = self.p + self.R.dot([0,0,-0.10])
-            print()
-            print('Approccio')
-            print(p_approach)
             self.currentCommand = 'approachToObject'
             cmd_to_robot = Command()
             cmd_to_robot.command = 'approachToObject' 
@@ -208,19 +159,16 @@ class Controller:
             cmd_to_robot.goal.orientation.w = self.quat[0]
             cmd_to_robot.grasp_width = 0.0
             self.__publisherCommandToRobot.publish(cmd_to_robot)
-            print("HO MANDATO L'APPROCCIO AL ROBOT. Attendo la sua risposta")
-
         else:
-            print("esito FALSE")
             self.goToOtherPos()
-            print("HO MANDATO IN OTHER IL ROBOT")
 
-    def checkKeypoints(self, key2D): #funzione per vedere se ci sono i 3 keypoints di interesse
-        i = 1 #indice che indica il primo dei tre punti 
-        e1 = key2D[i, 0] != -1 and key2D[i, 1] != -1
-        e2 = key2D[i+1, 0] != -1 and key2D[i+1, 1] != -1
-        e3 = key2D[i+2, 0] != -1 and key2D[i+2, 1] != -1
-        return (e1 and e2 and e3)
+    def checkKeypoints(self, key2D): 
+        count = 0
+        for i in range(len(key2D)):
+            if key2D[i, 0] != -1 and key2D[i, 1] != -1:
+                count = count + 1
+        
+        return (count >= 3)
 
 
     def robot_done_callback(self, data):
@@ -229,6 +177,8 @@ class Controller:
         elif self.currentCommand == 'goToObject':
             self.grasp()
         elif self.currentCommand == 'grasp':
+            self.goToReleaseApproach()
+        elif self.currentCommand == 'goToReleaseApproach':
             self.goToRelease()
         elif self.currentCommand == 'goToRelease':
             self.open_gripper()
@@ -236,7 +186,7 @@ class Controller:
             self.goToHome('home')
         elif self.currentCommand == 'error':
             self.__publisherTriggerCamera.publish('take_image')
-        elif self.currentCommand == 'homeStart': ########################
+        elif self.currentCommand == 'homeStart': 
             quat = np.array([data.rPose.orientation.w, data.rPose.orientation.x, data.rPose.orientation.y, data.rPose.orientation.z])
             T = GeomUtility.quat2r(quat)
             self.Ae_curr[:3,:3] = np.array(T)
@@ -248,6 +198,25 @@ class Controller:
             self.__publisherTriggerCamera.publish('take_image')
         elif self.currentCommand == 'home':
             rospy.loginfo('END.')
+
+    def goToReleaseApproach(self):
+        self.currentCommand = 'goToReleaseApproach'
+        cmd_to_robot = Command()
+        cmd_to_robot.command = 'goToReleaseApproach' 
+        cmd_to_robot.typePlan = 'ee'
+        cmd_to_robot.goalJM = ''
+        p_approach = self.p + self.R.dot([0,0,-0.20])
+        cmd_to_robot.goal.position.x = p_approach[0]
+        cmd_to_robot.goal.position.y = p_approach[1]
+        cmd_to_robot.goal.position.z = p_approach[2]
+        quat = GeomUtility.r2quat(self.T_release[:3,:3])
+        cmd_to_robot.goal.orientation.x = quat[1]
+        cmd_to_robot.goal.orientation.y = quat[2]
+        cmd_to_robot.goal.orientation.z = quat[3]
+        cmd_to_robot.goal.orientation.w = quat[0]
+        cmd_to_robot.grasp_width = 0.0
+        self.__publisherCommandToRobot.publish(cmd_to_robot)
+
 
     def goToRelease(self):
         self.currentCommand = 'goToRelease'
@@ -265,7 +234,6 @@ class Controller:
         cmd_to_robot.goal.orientation.w = quat[0]
         cmd_to_robot.grasp_width = 0.0
         self.__publisherCommandToRobot.publish(cmd_to_robot)
-        print("HO MANDATO IL RELEASE AL ROBOT. Attendo la sua risposta")
 
     def open_gripper(self):
         self.currentCommand = 'release'
@@ -282,7 +250,6 @@ class Controller:
         cmd_to_robot.goal.orientation.w = 1
         cmd_to_robot.grasp_width = self.grasp_width
         self.__publisherCommandToRobot.publish(cmd_to_robot)
-        print("HO MANDATO APRI AL ROBOT. Attendo la sua risposta")
 
     def grasp(self):
         self.currentCommand = 'grasp'
@@ -299,7 +266,6 @@ class Controller:
         cmd_to_robot.goal.orientation.w = 1
         cmd_to_robot.grasp_width = self.grasp_width
         self.__publisherCommandToRobot.publish(cmd_to_robot)
-        print("HO MANDATO CHIUDI AL ROBOT. Attendo la sua risposta")
 
     def goToObject(self):
         self.currentCommand = 'goToObject'
@@ -316,7 +282,6 @@ class Controller:
         cmd_to_robot.goal.orientation.w = self.quat[0]
         cmd_to_robot.grasp_width = 0.0
         self.__publisherCommandToRobot.publish(cmd_to_robot)
-        print("HO MANDATO VAI ALL'OGGETTO AL ROBOT. Attendo la sua risposta")
 
     def goToHome(self, currentCmd):
         self.currentCommand = currentCmd
@@ -334,40 +299,32 @@ class Controller:
         cmd_to_robot.goal.orientation.w = quat[0]
         cmd_to_robot.grasp_width = 0.0
         self.__publisherCommandToRobot.publish(cmd_to_robot)
-        print("HO MANDATO IL ROBOT IN HOME")
 
     def goToOtherPos(self):
-        # INDIVIDUARE CENTRO bb --> p in terna base (mettere la z a zero)
-
-        # SCELTA ASSE PARALLELO A Z BASE PASSANTE PER CENTRO BB
-        
-        self.currentCommand = 'error'
-        cmd_to_robot = Command()
-        cmd_to_robot.command = '' 
-        cmd_to_robot.typePlan = 'eeOther'
-        cmd_to_robot.goalJM = ''
-        cmd_to_robot.goal.position.x = 0
-        cmd_to_robot.goal.position.y = 0
-        cmd_to_robot.goal.position.z = 0
-        cmd_to_robot.goal.orientation.x = 0
-        cmd_to_robot.goal.orientation.y = 0
-        cmd_to_robot.goal.orientation.z = 0
-        cmd_to_robot.goal.orientation.w = 1
-        cmd_to_robot.grasp_width = 0.0
-        self.__publisherCommandToRobot.publish(cmd_to_robot)
+        if self.angleForLook == np.pi*2:
+            self.goToHome('home')
+            return
+        poI = GeomUtility.getCenterBB(self.detectedBBs_list[0]) # p oggetto in terna immagine
+        poI_cam = GeomUtility.deproject_pixel_to_point(poI, self.depth_array, self.K)
+        poI_cam_ = np.array([poI_cam[0], poI_cam[1], poI_cam[2], 1])
+        poO = self.Ae_curr.dot(self.Ace.dot(poI_cam_.T))
+        po = poO[:3]
+        newT = GeomUtility.computeNewLookPose(po, self.Ae_curr, self.angleForLook)
+        self.angleForLook = self.angleForLook + (np.pi/2)
+        if self.angleForLook == (2*np.pi):
+            self.angleForLook = 0.
+        self.T_home = newT
+        self.goToHome('homeStart')
 
     def robot_error_callback(self, data):
         if data.data == 'errorGrasp':
-            print("HO RICEVUTO ERRORE SU GRASPING")
+            print("ERROR ON GRASPING")
             self.goToHome('error')
         elif data.data == 'errorRob':
-            print("HO RICEVUTO ERRORE SU ROBOT")
+            print("ERROR ON ROBOT")
             self.goToOtherPos()
 
-
-    
 def main(args):
-
     controller = Controller()
     try:
         rospy.spin()
@@ -376,5 +333,3 @@ def main(args):
 
 if __name__ == '__main__':
     main(sys.argv)
-
-
