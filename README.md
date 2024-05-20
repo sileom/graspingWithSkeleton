@@ -35,8 +35,8 @@ $ cd ..
 $ catkin_make
 ```
 
-{% ## Detection :robot: %}
-<!-- ![](demos/detection_bag.png)
+## Detection :robot: 
+![](demos/detection_bag.png)
 1. To launch graspingWithSkeleton run the command:
     ```shell
     $ roslaunch skeleton skeleton.launch
