@@ -35,7 +35,22 @@ $ cd ..
 $ catkin_make
 ```
 
-## Detection :robot: 
+## Skeleton detection and grasping :robot: 
+1. To launch graspingWithSkeleton run the command:
+    ```shell
+    $ roslaunch skeleton skeleton_oil_iron.launch
+    ```
+2. To launch the camera trigger run the command:
+    ```shell
+    $ roslaunch skeleton trigger_camera.launch
+    ```
+3. To launch the camera node run the command of the [*RealSense ROS*](https://github.com/IntelRealSense/realsense-ros.git) package:
+    ```shell
+    $ roslaunch realsense2_camera rs_rgbd.launch
+    ```
+
+    
+<!-- ## Detection :robot: 
 ![](demos/detection_bag.png)
 1. To launch graspingWithSkeleton run the command:
     ```shell
