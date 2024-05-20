@@ -1,235 +1,83 @@
-#!/usr/bin/env python
-
-import sys
-import rospy
-import message_filters
-from detector import Detector
-from std_msgs.msg import String
-from sensor_msgs.msg import Image
-from cv_bridge import CvBridge, CvBridgeError
-from skeleton.msg import DetectionMsg, DetectionArrayMsg, KeypointsMsg
-import cv2
-#from utils import Utils
+import cv2 as cv
 import numpy as np
-import imageio
-import os
+import timeit
+from utils import Utils
 
-class DetectorNode:
+class Detector:
 
-    def __init__(self):
-        rospy.init_node('skeleton', anonymous=True)
-        self.node_name = rospy.get_name()
-        s_ = self.node_name+ '/obj_names'
-        print(rospy.get_param(s_))
+    #def __init__(self, yolo_cfg:str, yolo_weights:str, obj_names:str, conf_threshold:float = 0.3, nms_threshold:float = 0.4):
+    def __init__(self, yolo_cfg, yolo_weights, obj_names, conf_threshold = 0.3, nms_threshold = 0.4, obj = "", obj_pt = ""):
+        self.conf_threshold = conf_threshold
+        self.nms_threshold = nms_threshold
+
+        self.yolo_cfg = yolo_cfg
+        self.yolo_weights = yolo_weights
+        self.obj_names = obj_names
+
+        self.obj = obj
+        self.obj_pt = obj_pt
+
+        self.__init_colors_for_classes()
+        self.__init_network()
+    
+    def __init_colors_for_classes(self):
+        self.labels = Utils.load_classes(self.obj_names)
+
+        np.random.seed(777)
+        self.bbox_colors = np.random.uniform(low=0, high=255, size=(len(self.labels), 3))
         
-        '''
-        yolo_cfg = rospy.get_param(f'/{self.node_name}/yolo_cfg')
-        yolo_weights = rospy.get_param(f'/{self.node_name}/yolo_weights')
-        obj_names = rospy.get_param(f'/{self.node_name}/obj_names')
-
-        conf_threshold = float(rospy.get_param(f'/{self.node_name}/conf_threshold'))
-        nms_threshold = float(rospy.get_param(f'/{self.node_name}/nms_threshold'))
-        '''
-        yolo_cfg = rospy.get_param(self.node_name + '/yolo_cfg')
-        yolo_weights = rospy.get_param(self.node_name + '/yolo_weights')
-        obj_names = rospy.get_param(self.node_name + '/obj_names')
-
-        conf_threshold = float(rospy.get_param(self.node_name + '/conf_threshold'))
-        nms_threshold = float(rospy.get_param(self.node_name + '/nms_threshold'))
-
-        self.name_obj = rospy.get_param(self.node_name + '/name_obj')
-        self.name_obj_pt = rospy.get_param(self.node_name + '/name_obj_pt')
-
-        self.detector = Detector(yolo_cfg=yolo_cfg, \
-                                 yolo_weights=yolo_weights,\
-                                 obj_names=obj_names,\
-                                 conf_threshold=conf_threshold,\
-                                 nms_threshold=nms_threshold,\
-                                 obj=self.name_obj,\
-                                 obj_pt=self.name_obj_pt)
+    
+    def __init_network(self):
+        self.net = cv.dnn.readNetFromDarknet(Utils.absolute_path(self.yolo_cfg), \
+                                    darknetModel=Utils.absolute_path(self.yolo_weights))
         
-        self.__bridge = CvBridge()
-        self.image_save_path = rospy.get_param(self.node_name + '/image_save_path')
-        self.number_of_keypoints = int(rospy.get_param(self.node_name + '/number_of_keypoints'))
+        if Utils.is_cuda_cv():
+            self.net.setPreferableBackend(cv.dnn.DNN_BACKEND_CUDA)
+            self.net.setPreferableTarget(cv.dnn.DNN_TARGET_CUDA)
 
-        #bbox_topic = rospy.get_param(self.node_name + '/bbox_topic')
+        layer_names = self.net.getLayerNames()
+        self.__output_layer = [layer_names[i[0] - 1] for i in self.net.getUnconnectedOutLayers()]
 
-        #SUBSCRIBERS
-        trigger_camera_topic = rospy.get_param(self.node_name + '/trigger_camera_topic')
-        image_source_topic = rospy.get_param(self.node_name + '/image_source_topic')
-        depth_source_topic = rospy.get_param(self.node_name + '/depth_source_topic')
+    def detect_objects(self, image):
+        blob = cv.dnn.blobFromImage(image, scalefactor=1/255, size=(416, 416), swapRB=True, crop=False)
+        self.net.setInput(blob)
+        start = timeit.default_timer()
+        outputs = self.net.forward(self.__output_layer)
+        stop = timeit.default_timer()
+        print('TIME CNN - ONLY FORWARD: ', stop - start)  
+        return outputs
+    
+    def process_image(self, outputs, image):
+        boxes, confidences, classIDs = [], [], []
 
-        #buffer size = 2**24 | 480*640*3
-        #rospy.Subscriber(image_source_topic, Image, self.detect_image, queue_size=1, buff_size=2**24)   
-        rgb_sub = message_filters.Subscriber(image_source_topic, Image, queue_size=1)
-        depth_sub = message_filters.Subscriber(depth_source_topic, Image, queue_size=1)
+        H, W = image.shape[:2]
+                                    
+        for out in outputs:
+            for detection in out:
+                scores = detection[5:]
+                classID = np.argmax(scores)
+                confidence = scores[classID]
+                                        
+                if confidence > self.conf_threshold:
+                    if self.labels[classID] != self.obj_pt: #"oil_separator_crankcase_castiron_pt1":
+                        box = detection[0:4] * np.array([W, H, W, H])
+                        (centerX, centerY, width, height) = box.astype("int")
+                        x = int(centerX - (width / 2))
+                        y = int(centerY - (height / 2))
+                        boxes.append([x, y, int(width), int(height)])
+                        confidences.append(float(confidence))
+                        classIDs.append(classID)
+                                        
+        idxs = cv.dnn.NMSBoxes(boxes, confidences, score_threshold=self.conf_threshold, nms_threshold=self.nms_threshold)
+                                        
+        if len(idxs)>0:
+            for i in idxs.flatten():
+                (x, y) = (boxes[i][0], boxes[i][1])
+                (w, h) = (boxes[i][2], boxes[i][3])
+                                        
+                clr = [int(c) for c in self.bbox_colors[classIDs[i]]]
+                                        
+                cv.rectangle(image, (x, y), (x+w, y+h), clr, 2)
+                cv.putText(image, "{}: {:.4f}".format(self.labels[classIDs[i]], confidences[i]), (x, y-5), cv.FONT_HERSHEY_SIMPLEX, 0.5, clr, 2)
         
-        ts = message_filters.ApproximateTimeSynchronizer([rgb_sub, depth_sub], 1, 0.1, allow_headerless=True) 
-        ts.registerCallback(self.take_images)
-
-        rospy.Subscriber(trigger_camera_topic, String, self.trigger_camera, queue_size=1, buff_size=2**24)   
-
-        # PUBLISHERS
-        detections_image_topic = rospy.get_param(self.node_name + '/detections_image_topic')
-        detections_bbox_topic = rospy.get_param(self.node_name + '/detections_bbox_topic')
-        keypoints_topic = rospy.get_param(self.node_name + '/keypoints_topic')
-        self.__publisher = rospy.Publisher(detections_image_topic, Image, queue_size=1)
-        #Questo nodo deve pubblicare le bbox sul topic per farle leggere all'altro nodo che creeremo
-        #self.__publisherBB = rospy.Publisher(bbox_topic, DetectionMsg, queue_size=1)
-        #Pubblichiamo anche l'array dell bboxes che dovra' leggere l'altro nodo
-        self.__publisher_DETECTION_BBS = rospy.Publisher(detections_bbox_topic, DetectionArrayMsg, queue_size=1)
-        self.__publisher_keypoints = rospy.Publisher(keypoints_topic, KeypointsMsg, queue_size=1)
-
-        self.take_image = False
-
-        self.idx = 0 #serve per salvare le immagini brutte
-
-
-    def trigger_camera(self, data):
-        try:
-            if data.data=='take_image':
-                self.take_image = True
-        except CvBridgeError as e:
- 	        print(e)
-        
-
-    def convert_depth(self, data):
-        try:
-            depth_image = self.__bridge.imgmsg_to_cv2(data, "passthrough")
-            #depth_image = imageio.imread('/home/monica/ros_catkin_ws_mine/src/skeleton/input/depth.tiff')
-        except CvBridgeError as e:
- 	        print(e)
-
-        #Convert the depth image to a Numpy array
-        self.depth_array = np.array(depth_image, dtype=np.float32)
-
-
-    def take_images(self, data, depth_data): #data is for the rgb image
-        if self.take_image == True:
-            try:
-                image_i = self.__bridge.imgmsg_to_cv2(data, 'bgr8')
-                #print(data.header.stamp)
-                #image_i = cv2.imread('/home/monica/ros_catkin_ws_mine/src/skeleton/input/rgb.png')
-                self.convert_depth(depth_data)
-
-                #image_i = cv2.cvtColor(image_i, cv2.COLOR_BGR2RGB)
-
-                # SALVA LE IMMAGINI - TODO Vedere come salvare la depth 
-                cv2.imwrite(self.image_save_path + '/rgb_01.png', image_i)
-                img16 = self.depth_array.astype(np.uint16)
-                imageio.imwrite(self.image_save_path + '/depth_01.tiff', img16)
-                imageio.imwrite(self.image_save_path + '/depth_011.png', img16)
-
-                # DETECTION KEYPOINTS 
-                keyPoints = self.detect_keypoints()
-                img8 = self.depth_array.astype(np.uint8)
-
-                cv2.namedWindow('Keypoints', cv2.WINDOW_AUTOSIZE)
-                while np.all((keyPoints == -1)):
-                    if cv2.getWindowProperty('Keypoints', cv2.WND_PROP_VISIBLE):
-                        cv2.destroyWindow('Keypoints')
-                    return
-                    #cv2.imshow('Keypoints not detected', image_i)
-                    #cv2.waitKey(0)
-                
-                img_det = cv2.imread(self.image_save_path + '/test2.png', cv2.IMREAD_COLOR)
-                c = ''
-                cv2.rectangle(img8, (int(keyPoints[1,0])-10, int(keyPoints[1,1])-10), (int(keyPoints[1,0])+10, int(keyPoints[1,1])+10), (255,0,0), 2)
-                cv2.imshow('Keypoints', img8)
-                c = cv2.waitKey(0)
-                print(c)
-
-                if c == 121: #'y':
-                    cv2.destroyWindow('Keypoints')
-                    self.take_image = False
-                    keys_msg = KeypointsMsg()
-                    for i in range(self.number_of_keypoints):
-                        for j in range(2):
-                            keys_msg.keypoints.append(int(keyPoints[i,j]))
-                            #print(int(keypoints[i,j]))
-
-                    self.__publisher_keypoints.publish(keys_msg)
-                    # DETECTION BB - TODO
-                    self.detect_image()
-                elif c == 115: #'s':
-                    cv2.destroyWindow('Keypoints')
-                    cv2.imwrite(self.image_save_path + '/badrgb_' + str(self.idx) + '.png', image_i)
-                    self.idx = self.idx + 1
-                    #self.take_image = False
-                    return
-            except CvBridgeError as cve:
-                rospy.logerr(str(cve))
-                return
-
-    #Il nodo controller si sottoscrive alle BB e ai keypoints, carica i keypoints e vede se ce ne sono tre. 
-    # carica la depth e se tutto e' ok passa da  2D a 3D. e chiama la funzione di ragionamento
-    # se non e' ok dice al robot di muoversi
-
-    def detect_keypoints(self):
-        # RUN DNN
-        os.system('bash /home/monica/ros_catkin_ws_mine/src/skeleton/runDNN.sh')
-        keypoints = np.loadtxt(self.image_save_path + 'keypoints.txt', comments="#", delimiter=" ", usecols=range(2))
-        print("FINE DNN")
-        return keypoints
-        #esito = True
-        #while(esito):
-        #    try:
-        #        keypoints = np.loadtxt(self.image_save_path + 'keypoints.txt', comments="#", delimiter=" ", usecols=range(2))
-        #        esito = False
-        #    except Exception as e:
-        #        rospy.logerr(str(e))
-
-        #keys_msg = KeypointsMsg()
-        #for i in range(self.number_of_keypoints):
-        #    for j in range(2):
-        #        keys_msg.keypoints.append(int(keypoints[i,j]))
-        #        #print(int(keypoints[i,j]))
-#
-        #self.__publisher_keypoints.publish(keys_msg)
-        #NEL CONTROLLER USA RESHAPE
-        #arr = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-        #newarr = arr.reshape(5, 2)
-
-    def detect_image(self):
-        # CARICA LE IMMAGINI - TODO
-        image_o = cv2.imread(self.image_save_path + '/rgb_01.png')
-        image = image_o.copy()
-
-        outputs = self.detector.detect_objects(image)
-        [idxs, boxes, classIDs] = self.detector.process_image(outputs, image)
-
-        try:
-            detection_message = self.__bridge.cv2_to_imgmsg(image, "bgr8")
-            self.__publisher.publish(detection_message)
-
-            detections_msg = DetectionArrayMsg()
-            if len(idxs)>0: # the system finds any objects
-                for i in idxs.flatten():
-                    det_temp = DetectionMsg()
-                    det_temp.type = "bb"
-                    det_temp.classe = self.detector.labels[classIDs[i]] #sUtils.get_detection_class(classIDs[i])# str(classIDs[i])
-                    det_temp.x = boxes[i][0]
-                    det_temp.y = boxes[i][1]
-                    det_temp.w = boxes[i][2]
-                    det_temp.h = boxes[i][3]
-                    detections_msg.detections.append(det_temp)
-            else:
-                print("NO OBJECT FOUND")
-
-            self.__publisher_DETECTION_BBS.publish(detections_msg)
-
-        except CvBridgeError as cve:
-            rospy.logerr(str(cve))
-            return
-
-def main(args):
-
-    detector_node = DetectorNode()
-
-    try:
-        rospy.spin()
-    except KeyboardInterrupt:
-        rospy.logerr('Shutting down')
-
-if __name__ == '__main__':
-    main(sys.argv)
+        return idxs, boxes, classIDs
