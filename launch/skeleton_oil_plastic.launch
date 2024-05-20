@@ -1,0 +1,78 @@
+<?xml version="1.0" ?>
+<launch>
+    <!-- Topic-->
+    <arg name="detections_image" default="detections_image"/>
+    
+    <!--<arg name='image_source' default='/device_0/sensor_1/Color_0/image/data'/>-->
+    <arg name='image_source' default='/camera/color/image_raw'/>
+    
+    <!--<arg name='depth_source' default='/camera/aligned_depth_to_color/image_raw'/>-->
+    <arg name='depth_source' default='/camera/aligned_depth_to_color/image_raw'/>
+
+    <!--<arg name='pointcloud_source' default='/camera/depth/color/points'/>-->
+    <arg name='pointcloud_source' default='/camera/depth_registered/points'/> <!--default='/camera/depth/color/points'/>-->
+
+    <arg name='trigger_camera_topic' default='/trigger_camera'/> 
+    <arg name='keypoints_topic' default='/keypoints'/> 
+    <arg name='image_save_path' default='/home/monica/ros_catkin_ws_mine/src/skeleton/data/'/>
+    <arg name='number_of_keypoints' default='5'/> 
+
+    <arg name='test_num' default='0'/> 
+    <arg name="grasp_width" default="0.015"/>
+
+    <!-- # Arg Detector -->
+    <!-- ## Path File-->
+    <arg name="yolo_cfg" default="yolo_model/yolo-obj.cfg"/>
+    <arg name="yolo_weights" default="yolo_model/yolo-obj.weights"/>
+    <arg name="obj_names" default="yolo_model/obj.names"/>
+
+    <!-- ## Thresholds-->
+    <arg name="conf_threshold" default="0.3"/>
+    <arg name="nms_threshold" default="0.4"/>
+
+    <arg name='bbox' default='bbox'/>
+    <arg name='detections_bbox' default='detections_bbox'/>
+
+    <arg name="name_obj" default="oil_separator_crankcase_plastic"/>
+    <arg name="name_obj_pt" default="oil_separator_crankcase_plastic_pt1"/>
+
+
+    <node name="controller" pkg="skeleton" type="controller.py" output="screen">
+        <param name="keypoints_topic" type="str" value="$(arg keypoints_topic)"/>
+        <param name="number_of_keypoints" type="int" value="$(arg number_of_keypoints)"/>
+        <param name="detections_bbox_topic" type="str" value="$(arg detections_bbox)"/>
+        <param name="trigger_camera_topic" type="str" value="$(arg trigger_camera_topic)"/>
+        <param name="image_save_path" type="str" value="$(arg image_save_path)"/>
+        <param name="grasp_width" type="double" value="$(arg grasp_width)"/>
+    </node>
+
+
+    <node name="skeleton" pkg="skeleton" type="detector_node.py" output="screen">
+        <param name="detections_image_topic" type="str" value="$(arg detections_image)"/>
+        <param name="image_source_topic" type="str" value="$(arg image_source)"/>
+        <param name="depth_source_topic" type="str" value="$(arg depth_source)"/>
+        <param name="keypoints_topic" type="str" value="$(arg keypoints_topic)"/>
+
+        <param name="yolo_cfg" type="str" value="$(arg yolo_cfg)"/>
+        <param name="yolo_weights" type="str" value="$(arg yolo_weights)"/>
+        <param name="obj_names" type="str" value="$(arg obj_names)"/>
+        <param name="conf_threshold" type="double" value="$(arg conf_threshold)"/>
+        <param name="nms_threshold" type="double" value="$(arg nms_threshold)"/>
+
+        <param name="bbox_topic" type="str" value="$(arg bbox)"/>
+        <param name="detections_bbox_topic" type="str" value="$(arg detections_bbox)"/>
+
+        <param name="trigger_camera_topic" type="str" value="$(arg trigger_camera_topic)"/>
+        <param name="image_save_path" type="str" value="$(arg image_save_path)"/>
+        <param name="number_of_keypoints" type="int" value="$(arg number_of_keypoints)"/>
+        <param name="test_num" type="int" value="$(arg test_num)"/>
+
+        <param name="name_obj" type="str" value="$(arg name_obj)"/>
+        <param name="name_obj_pt" type="str" value="$(arg name_obj_pt)"/>
+
+    </node>
+
+    <!--<node name="$(anon visualizer)" pkg="skeleton" type="visualizer.py" output="screen">
+        <param name="view_image_topic" value="$(arg detections_image)"/>
+    </node> -->
+</launch>
