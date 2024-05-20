@@ -10,6 +10,8 @@ ___
 * OpenCV 4.7.0+
 * NumPy 1.19.5+
 * Download [yolo-obj.weights](https://drive.google.com/file/d/1rSoWctsJGUFySvskffHQ4HlEMEv7jYyw/view?usp=sharing) and place it in the [yolo_model](yolo_model) folder
+* Download MobileNet-v3 checkpoints for the three object:
+** [yolo-obj.weights](https://drive.google.com/file/d/1rSoWctsJGUFySvskffHQ4HlEMEv7jYyw/view?usp=sharing) and place it in the [yolo_model](yolo_model) folder
 
 ## Installation
 In order to install graspingWithSkeleton, clone this repository in your catkin workspace and compile the package using ROS.
