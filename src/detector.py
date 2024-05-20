@@ -1,5 +1,6 @@
 import cv2 as cv
 import numpy as np
+import timeit
 from utils import Utils
 
 class Detector:
@@ -40,7 +41,10 @@ class Detector:
     def detect_objects(self, image):
         blob = cv.dnn.blobFromImage(image, scalefactor=1/255, size=(416, 416), swapRB=True, crop=False)
         self.net.setInput(blob)
+        start = timeit.default_timer()
         outputs = self.net.forward(self.__output_layer)
+        stop = timeit.default_timer()
+        print('TIME CNN - ONLY FORWARD: ', stop - start)  
         return outputs
     
     def process_image(self, outputs, image):
