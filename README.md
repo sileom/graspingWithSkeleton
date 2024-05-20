@@ -35,7 +35,7 @@ $ cd ..
 $ catkin_make
 ```
 
-<## Detection :robot:
+{% ## Detection :robot: %}
 ![](demos/detection_bag.png)
 1. To launch graspingWithSkeleton run the command:
     ```shell
@@ -45,4 +45,4 @@ $ catkin_make
     ```shell
     $ rosbag play <bag-name>.bag
     ```
-You can change the parameters in the [launch file](launch/skeleton.launch) (e.g. topics, confidence threshold value...) and launch it.>
+You can change the parameters in the [launch file](launch/skeleton.launch) (e.g. topics, confidence threshold value...) and launch it. -->
